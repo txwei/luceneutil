@@ -17472,17 +17472,4 @@ IntSet: intSet//timesecnum 35639 83713 74483 38015 71659 39821 49398 85907 44238
 IntSet: intSet//timesecnum 81137 3794 81437 12049 80198 37252 77277 71202 70843 79167 52678 35651 26698 33299 63901 43387 52579 70994 39100 74869 52293 82088 81012 74524 71041 26906 60708 83350 39811 86021 55416 6473 44999 7779 23839 57339 61379 72047 22121 54324 53377 35835 2901 42666 15440 46276 58579 5305 65653 20983
 AndMissingHigh: titledvsort//+jasdgiasgdiuygduasgd +ring
 
-# Leading-wildcard / unanchored-regexp regression probes (apache/lucene#13454).
-# The classic QueryParser rejects a leading '*', so we use the equivalent
-# unanchored regexp /.*x.*/ -- a leading .* cannot seek the terms dictionary, so
-# MultiTermQuery must scan the whole term dict. "qmzxwvbb" matches no term, so the
-# scan walks the entire dictionary (the worst case).
-#   WildcardLeading            standalone unanchored regexp: scans the term dict in
-#                              both versions (nothing can skip it) -- the always-slow baseline.
-#   WildcardLeadingAndMissing  regression guard: the same regexp AND a required term
-#                              that matches 0 docs, regexp listed FIRST. Lazy term
-#                              collection lets the 0-match clause short-circuit the
-#                              conjunction (fast); eager collection (lucene#13454)
-#                              scans the term dict before the short-circuit can apply (slow).
-WildcardLeading: body:/.*qmzxwvbb.*/
 WildcardLeadingAndMissing: +body:/.*qmzxwvbb.*/ +body:zzznomatchqqq
