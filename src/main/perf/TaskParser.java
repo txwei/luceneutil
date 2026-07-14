@@ -160,10 +160,8 @@ class TaskParser implements Closeable {
   private final static Pattern countOnlyPattern = Pattern.compile("count\\((.*?)\\)");
   private final static Pattern minShouldMatchPattern = Pattern.compile(" \\+minShouldMatch=(\\d+)($| )");
   private final static Pattern constantScorePattern = Pattern.compile(" \\+constantScore($| )");
-  // Wraps the WHOLE disjunction in a single ConstantScoreQuery (mimics an `in`-clause over a
-  // low-cardinality field, which rewrites to ConstantScoreQuery(a OR b OR ...) -> a single
-  // ConstantScoreScorer over a DisjunctionDISIApproximation). Distinct from +constantScore, which
-  // wraps each clause individually.
+  // Wraps the whole disjunction in a single ConstantScoreQuery (unlike +constantScore, which wraps
+  // each clause individually).
   private final static Pattern constantScoreDisjunctionPattern = Pattern.compile(" \\+constantScoreDisjunction($| )");
   // pattern: taskName term1 term2 term3 term4 +combinedFields=field1^1.0,field2,field3^2.0
   // this pattern doesn't handle all variations of floating numbers, such as .9 , but should be good enough for perf test query parsing purpose
@@ -666,23 +664,14 @@ class TaskParser implements Closeable {
       }
 
       if (constantScoreDisjunction) {
-        // Reproduce mongot's query.uuid-low-cardinality-in-disjunction shape. An `in`-clause over a
-        // low-cardinality field rewrites to ConstantScoreQuery(a OR b OR ...) -> one
-        // ConstantScoreScorer over a DisjunctionDISIApproximation. But that alone is NOT enough to
-        // hit the code path: a standalone ConstantScoreQuery uses DefaultBulkScorer, which never
-        // calls Scorer#nextDocsAndScores. The regression only appears when the constant-score
-        // disjunction is one SHOULD clause of a larger top-level scoring BooleanQuery, which is
-        // driven by MaxScoreBulkScorer and drains each clause via nextDocsAndScores.
-        //
-        // So we build: BQ{ SHOULD BoostQuery(ConstantScore(a OR b OR ...), large),  SHOULD term }.
-        // The large boost makes the constant-score clause the essential/dominant clause so its
-        // tied scores cannot be pruned and the entire candidate stream is drained through it --
-        // exactly the case the bulk nextDocsAndScores optimization targets.
+        // Build BQ{ SHOULD BoostQuery(ConstantScore(a OR b OR ...), large), SHOULD term }. The
+        // boosted constant-score disjunction is the dominant clause, and the second scoring clause
+        // makes the top-level query a scoring disjunction driven by MaxScoreBulkScorer.
         if (query instanceof BooleanQuery bq) {
-          Query inClause = new BoostQuery(new ConstantScoreQuery(bq), 1000f);
-          Query scoringClause = bq.clauses().get(0).query(); // a plain scoring term to force MaxScoreBulkScorer
+          Query disjunctionClause = new BoostQuery(new ConstantScoreQuery(bq), 1000f);
+          Query scoringClause = bq.clauses().get(0).query();
           return new BooleanQuery.Builder()
-              .add(inClause, Occur.SHOULD)
+              .add(disjunctionClause, Occur.SHOULD)
               .add(scoringClause, Occur.SHOULD)
               .build();
         }
