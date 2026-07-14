@@ -11566,3 +11566,11 @@ BM25MSM2: http first were +minShouldMatch=2
 BM25MSM2: from his new +minShouldMatch=2
 BM25MSM2: name cite he +minShouldMatch=2
 BM25MSM2: title date which +minShouldMatch=2
+
+# --- ConstInDisj: large constant-score disjunction, mimics query.uuid-low-cardinality-in-disjunction ---
+ConstInDisj: ref http from title name cite which first also url date publisher s his were year accessdate has new one have 1 other he web its had 2 last all been after who may more two most united some 2010 +constantScoreDisjunction
+ConstInDisj: http from title name cite which first also url date publisher s his were year accessdate has new one have 1 other he web its had 2 last all been after who may more two most united some 2010 when +constantScoreDisjunction
+ConstInDisj: from title name cite which first also url date publisher s his were year accessdate has new one have 1 other he web its had 2 last all been after who may more two most united some 2010 when time +constantScoreDisjunction
+ConstInDisj: title name cite which first also url date publisher s his were year accessdate has new one have 1 other he web its had 2 last all been after who may more two most united some 2010 when time states +constantScoreDisjunction
+ConstInDisj: name cite which first also url date publisher s his were year accessdate has new one have 1 other he web its had 2 last all been after who may more two most united some 2010 when time states thumb +constantScoreDisjunction
+ConstInDisj: cite which first also url date publisher s his were year accessdate has new one have 1 other he web its had 2 last all been after who may more two most united some 2010 when time states thumb 2011 +constantScoreDisjunction

@@ -50,6 +50,7 @@ import org.apache.lucene.queries.spans.SpanTermQuery;
 import org.apache.lucene.queryparser.classic.ParseException;
 import org.apache.lucene.queryparser.classic.QueryParser;
 import org.apache.lucene.search.BooleanClause.Occur;
+import org.apache.lucene.search.BoostQuery;
 import org.apache.lucene.search.BooleanClause;
 import org.apache.lucene.search.ConstantScoreQuery;
 import org.apache.lucene.search.BooleanQuery.Builder;
@@ -159,6 +160,11 @@ class TaskParser implements Closeable {
   private final static Pattern countOnlyPattern = Pattern.compile("count\\((.*?)\\)");
   private final static Pattern minShouldMatchPattern = Pattern.compile(" \\+minShouldMatch=(\\d+)($| )");
   private final static Pattern constantScorePattern = Pattern.compile(" \\+constantScore($| )");
+  // Wraps the WHOLE disjunction in a single ConstantScoreQuery (mimics an `in`-clause over a
+  // low-cardinality field, which rewrites to ConstantScoreQuery(a OR b OR ...) -> a single
+  // ConstantScoreScorer over a DisjunctionDISIApproximation). Distinct from +constantScore, which
+  // wraps each clause individually.
+  private final static Pattern constantScoreDisjunctionPattern = Pattern.compile(" \\+constantScoreDisjunction($| )");
   // pattern: taskName term1 term2 term3 term4 +combinedFields=field1^1.0,field2,field3^2.0
   // this pattern doesn't handle all variations of floating numbers, such as .9 , but should be good enough for perf test query parsing purpose
   private final static Pattern combinedFieldsPattern = Pattern.compile(" \\+combinedFields=((\\p{Alnum}+(\\^\\d+.\\d)?,)+\\p{Alnum}+(\\^\\d+.\\d)?)");
@@ -229,6 +235,7 @@ class TaskParser implements Closeable {
     List<FieldAndWeight> combinedFields;
     List<String> dismaxFields;
     boolean constantScore;
+    boolean constantScoreDisjunction;
     String text;
     boolean doDrillSideways, doHilite, doStoredLoadsTask;
     Sort sort;
@@ -275,6 +282,7 @@ class TaskParser implements Closeable {
       text = taskAndType[1];
       int msm = parseMinShouldMatch();
       constantScore = parseConstantScore();
+      constantScoreDisjunction = parseConstantScoreDisjunction();
       combinedFields = parseCombinedFields();
       dismaxFields = parseDismaxFields();
       Query query = buildQuery(taskType, text, msm);
@@ -385,6 +393,19 @@ class TaskParser implements Closeable {
         text = (text.substring(0, m.start(0)) + " " + text.substring(m.end(0), text.length())).trim();
         if (m.find()) {
           throw new ParseException("+constantScore appears more than once in task: " + text);
+        }
+        return true;
+      }
+      return false;
+    }
+
+    boolean parseConstantScoreDisjunction() throws ParseException {
+      final Matcher m = constantScoreDisjunctionPattern.matcher(text);
+      if (m.find()) {
+        // Splice out the constantScoreDisjunction string:
+        text = (text.substring(0, m.start(0)) + " " + text.substring(m.end(0), text.length())).trim();
+        if (m.find()) {
+          throw new ParseException("+constantScoreDisjunction appears more than once in task: " + text);
         }
         return true;
       }
@@ -642,6 +663,30 @@ class TaskParser implements Closeable {
           return b.build();
         }
         throw new RuntimeException("minShouldMatch or +constantScore can only be used with BooleanQuery: query=" + origText);
+      }
+
+      if (constantScoreDisjunction) {
+        // Reproduce mongot's query.uuid-low-cardinality-in-disjunction shape. An `in`-clause over a
+        // low-cardinality field rewrites to ConstantScoreQuery(a OR b OR ...) -> one
+        // ConstantScoreScorer over a DisjunctionDISIApproximation. But that alone is NOT enough to
+        // hit the code path: a standalone ConstantScoreQuery uses DefaultBulkScorer, which never
+        // calls Scorer#nextDocsAndScores. The regression only appears when the constant-score
+        // disjunction is one SHOULD clause of a larger top-level scoring BooleanQuery, which is
+        // driven by MaxScoreBulkScorer and drains each clause via nextDocsAndScores.
+        //
+        // So we build: BQ{ SHOULD BoostQuery(ConstantScore(a OR b OR ...), large),  SHOULD term }.
+        // The large boost makes the constant-score clause the essential/dominant clause so its
+        // tied scores cannot be pruned and the entire candidate stream is drained through it --
+        // exactly the case the bulk nextDocsAndScores optimization targets.
+        if (query instanceof BooleanQuery bq) {
+          Query inClause = new BoostQuery(new ConstantScoreQuery(bq), 1000f);
+          Query scoringClause = bq.clauses().get(0).query(); // a plain scoring term to force MaxScoreBulkScorer
+          return new BooleanQuery.Builder()
+              .add(inClause, Occur.SHOULD)
+              .add(scoringClause, Occur.SHOULD)
+              .build();
+        }
+        throw new RuntimeException("+constantScoreDisjunction can only be used with BooleanQuery: query=" + origText);
       }
       return query;
     }
